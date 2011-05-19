@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               Math-SimpleHisto-XS
-version:            0.04
+version:            0.05
 abstract:           Simple histogramming, but kinda fast
 author:
     - Steffen Mueller <smueller@cpan.org>

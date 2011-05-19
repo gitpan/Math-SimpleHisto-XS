@@ -15,4 +15,5 @@ t/lib/Test_Functions.pm
 typemap
 XS.xs
 xt/bench.pl
+xt/bench_dumping.pl
 META.yml                                 Module meta-data (added by MakeMaker)

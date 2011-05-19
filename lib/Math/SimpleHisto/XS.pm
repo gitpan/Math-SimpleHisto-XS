@@ -4,7 +4,7 @@ use strict;
 use warnings;
 use Carp qw(croak);
 
-our $VERSION = '0.04';
+our $VERSION = '0.05'; # Committed to floating point version numbers!
 
 require XSLoader;
 XSLoader::load('Math::SimpleHisto::XS', $VERSION);
@@ -19,6 +19,22 @@ our @EXPORT_OK = qw(
 our %EXPORT_TAGS = (
   'all' => \@EXPORT_OK,
 );
+
+our @JSON_Modules = qw(JSON::XS JSON::PP JSON);
+our $JSON_Implementation;
+our $JSON;
+
+foreach my $json_module (@JSON_Modules) {
+  if (eval "require $json_module; 1;") {
+    $JSON = $json_module->new;
+    $JSON->indent(0) if $JSON->can('indent');
+    $JSON->space_before(0) if $JSON->can('space_before');
+    $JSON->space_after(0) if $JSON->can('space_after');
+    $JSON->canonical(0) if $JSON->can('canonical');
+    $JSON_Implementation = $json_module;
+    last if $JSON;
+  }
+}
 
 sub new {
   my $class = shift;
@@ -67,27 +83,32 @@ sub dump {
       join('|', @$data_ary)
     );
   }
-  elsif ($type eq 'json') {
-    require JSON;
-    my $json = JSON->new;
-    return $json->encode(
-      {
-        version => $VERSION,
-        min => $min, max => $max, nbins => $nbins,
-        nfills => $nfills, overflow => $overflow, underflow => $underflow,
-        data => $data_ary,
+  elsif ($type eq 'json' or $type eq 'yaml') {
+    my $struct = {
+      version => $VERSION,
+      min => $min, max => $max, nbins => $nbins,
+      nfills => $nfills, overflow => $overflow, underflow => $underflow,
+      data => $data_ary,
+    };
+    if ($type eq 'json') {
+      if (not defined $JSON) {
+        die "Cannot use JSON dump mode since no JSON handling module could be loaded: "
+            . join(', ', @JSON_Modules);
       }
-    );
+      return $JSON->encode($struct);
+    }
+    else { # type eq yaml
+      require YAML::Tiny;
+      return YAML::Tiny::Dump($struct);
+    }
   }
-  elsif ($type eq 'yaml') {
-    require YAML::Tiny;
-    return YAML::Tiny::Dump(
-      {
-        version => $VERSION,
-        min => $min, max => $max, nbins => $nbins,
-        nfills => $nfills, overflow => $overflow, underflow => $underflow,
-        data => $data_ary,
-      }
+  elsif ($type eq 'native_pack') {
+    return pack(
+      'd3 I2 d2 d*',
+      $VERSION,
+      $min, $max, $nbins,
+      $nfills, $overflow, $underflow,
+      @$data_ary
     );
   }
   else {
@@ -122,9 +143,11 @@ sub new_from_dump {
     };
   }
   elsif ($type eq 'json') {
-    require JSON;
-    my $json = JSON->new;
-    $hashref = $json->decode($dump);
+    if (not defined $JSON) {
+      die "Cannot use JSON dump mode since no JSON handling module could be loaded: "
+          . join(', ', @JSON_Modules);
+    }
+    $hashref = $JSON->decode($dump);
     $version = $hashref->{version};
     croak("Invalid JSON dump, not a hashref") if not ref($hashref) eq 'HASH';
   }
@@ -136,6 +159,13 @@ sub new_from_dump {
     }
     $hashref = $docs[0];
     $version = $hashref->{version};
+  }
+  elsif ($type eq 'native_pack') {
+    my @things = unpack('d3 I2 d2 d*', $dump);
+    $version = $things[0];
+    $hashref = {};
+    $hashref->{$_} = shift(@things) for qw(version min max nbins nfills overflow underflow);
+    $hashref->{data} = \@things;
   }
   else {
     croak("Unknown dump type: '$type'");
@@ -383,32 +413,60 @@ usual
   # ... later ...
   my $histo_object = Storable::thaw($string);
 
+Currently, this mechanism hardcodes the use of the C<simple>
+dump format. This is subject to change!
+
+The various serialization formats that this module supports (see
+the C<dump> documentation below) all have various pros and cons.
+For example, the C<native_pack> format is by far the fastest, but
+is not portable. The C<simple> format is a very simple-minded text
+format, but it is portable and performs well (comparable to the C<JSON>
+format when using C<JSON::XS>, other JSON modules will be B<MUCH>
+slower).
+Of all formats, the C<YAML> format is the slowest. See
+F<xt/bench_dumping.pl> for a simple benchmark script.
+
+None of the serialization formats currently supports compression, but
+the C<native_pack> format produces the smallest output at about half
+the size of the JSON output. The C<simple> format is close
+to C<JSON> for all but the smallest histograms, where it produces
+slightly smaller dumps.
+The C<YAML> produced is a bit bigger than the C<JSON>.
+
 =head2 C<dump>
 
 This module has fairly simple serialization methods. Just call the
 C<dump> method on an object of this class and provide the type of
 serialization desire. Currently valid serializations are
-C<simple>, C<JSON>, and C<YAML>. Case doesn't matter.
+C<simple>, C<JSON>, C<YAML>, and C<native_pack>. Case doesn't matter.
 
-For C<JSON> and C<YAML> support, you need to have the C<JSON>
-and C<YAML::Tiny> modules available respectively.
+For C<YAML> support, you need to have the C<YAML::Tiny> module
+available. For C<JSON> support, you need any of C<JSON::XS>,
+C<JSON::PP>, or C<JSON>. The three modules are tried in order
+at I<compile> time. The chosen implementation can be
+polled by looking at the
+C<$Math::SimpleHisto::XS::JSON_Implementation> variable. It contains
+the module name. Setting this vairable has no effect.
 
 The simple serialization format is a home grown text format that
 is subject to change, but in all likeliness, there will be some
 form of version migration code in the deserializer for backwards
 compatibility.
 
-All of the current serialization formats are text-based and thus
-portable and endianness-neutral.
+All of the serialization formats B<except for C<native_pack>>
+are text-based and thus portable and endianness-neutral.
+
+C<native_pack> should not be used when the serialized data
+is transferred to another machine.
 
 =head2 C<new_from_dump>
 
-Given the type of the dump (C<simple>, C<JSON>, or C<YAML>)
-and the actual dump string, creates a new histogram object
-from the contained data and returns it.
+Given the type of the dump (C<simple>, C<JSON>, C<YAML>,
+C<native_pack>) and the actual dump string, creates a new
+histogram object from the contained data and returns it.
 
-Deserializing C<JSON> and C<YAML> dumps requires the
-L<JSON> or L<YAML::Tiny> modules respectively.
+Deserializing C<JSON> and C<YAML> dumps requires
+the respective support modules to be available. See above.
 
 =head1 SEE ALSO
 
@@ -416,7 +474,8 @@ L<SOOT> is a dynamic wrapper around the ROOT C++ library
 which does histogramming and much more. Beware, it is experimental
 software.
 
-Serialization can make use of the L<JSON> or L<YAML::Tiny> modules.
+Serialization can make use of the L<JSON::XS>, L<JSON::PP>,
+L<JSON> or L<YAML::Tiny> modules.
 You may want to use the convenient L<Storable> module for transparent
 serialization of nested data structures containing objects
 of this class.
