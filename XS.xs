@@ -5,120 +5,22 @@
 
 #include "ppport.h"
 
-#include "hist_constants.h"
+#include "histogram.h"
 #include "const-c.inc"
 
-typedef struct {
-  /* parameters */
-  double min;
-  double max;
-  unsigned int nbins;
+#define HS_ASSERT_BIN_RANGE(self, i) STMT_START {                                     \
+  if (/* i < 0 || */ i >= self->nbins) {                                              \
+    croak("Bin %u outside histogram range (highest bin index is %u", i, self->nbins); \
+  } } STMT_END
 
-  /* derived */
-  double width;
-  double binsize;
+#define HS_CLONE_GET_CLASS(classname, src, where) STMT_START {                        \
+  if (!sv_isobject(src))                                                              \
+    croak("Cannot call " #where "() on non-object");                                  \
+  classname = sv_reftype(SvRV(src), TRUE);                                            \
+  if ( !sv_isobject(src) || (SvTYPE(SvRV(src)) != SVt_PVMG) )                         \
+    croak( "%s::" #where "() -- self is not a blessed SV reference", classname);      \
+  } STMT_END
 
-  /* content */
-  unsigned int nfills;
-  double overflow;
-  double underflow;
-  /* derived content */
-  double total;
-
-  /* main data store */
-  double* data;
-} simple_histo_1d;
-
-
-STATIC
-simple_histo_1d*
-histo_clone(pTHX_ simple_histo_1d* src, bool empty)
-{
-  simple_histo_1d* clone;
-  double *data, *data_src;
-
-  data_src = src->data;
-  Newx(clone, 1, simple_histo_1d);
-
-  if (!empty) {
-    unsigned int i;
-    Newx(data, src->nbins, double);
-    for (i = 0; i < src->nbins; ++i)
-      data[i] = data_src[i];
-    clone->nfills = src->nfills;
-    clone->overflow = src->overflow;
-    clone->underflow = src->underflow;
-    clone->total = src->total;
-  }
-  else {
-    Newxz(data, src->nbins, double); /* zero it all */
-    clone->nfills = 0.;
-    clone->overflow = 0.;
-    clone->underflow = 0.;
-    clone->total = 0.;
-  }
-  clone->data = data;
-
-  clone->nbins = src->nbins;
-  clone->min = src->min;
-  clone->max = src->max;
-  clone->width = src->width;
-  clone->binsize = src->binsize;
-
-  return clone;
-}
-
-STATIC
-SV*
-histo_data_av(pTHX_ simple_histo_1d* self) {
-  AV* av;
-  int i, n;
-  double* data;
-  SV* rv;
-
-  av = newAV();
-  rv = (SV*)newRV((SV*)av);
-  SvREFCNT_dec(av);
-
-  n = self->nbins;
-  av_fill(av, n-1);
-  data = self->data;
-  for (i = 0; i < n; ++i) {
-    av_store(av, i, newSVnv(data[i]));
-  }
-
-  return rv;
-}
-
-
-STATIC
-void
-histo_fill(simple_histo_1d* self, unsigned int n, double* x_in, double* w_in)
-{
-  unsigned int i;
-  double min = self->min, max = self->max, binsize = self->binsize, x, w;
-  double *data = self->data;
-
-  for (i = 0; i < n; ++i) {
-    self->nfills++;
-    x = x_in[i];
-    if (w_in == NULL)
-      w = 1;
-    else
-      w = w_in[i];
-    if (x >= max) {
-      self->overflow += w;
-      continue;
-    }
-    x -= min;
-    if (x < 0) {
-      self->underflow += w;
-      continue;
-    }
-    self->total += w;
-    data[(int)(x/binsize)] += w;
-  }
-}
 
 MODULE = Math::SimpleHisto::XS    PACKAGE = Math::SimpleHisto::XS
 
@@ -158,6 +60,51 @@ _new_histo(CLASS, nbins, min, max)
     RETVAL->underflow = 0.;
     RETVAL->total = 0.;
     RETVAL->nfills = 0;
+    RETVAL->bins = NULL;
+    Newxz(RETVAL->data, (int)RETVAL->nbins, double);
+  OUTPUT:
+    RETVAL
+
+simple_histo_1d*
+_new_histo_bins(CLASS, bins)
+    char *CLASS
+    AV* bins;
+  PREINIT:
+    unsigned int nbins, i;
+    double* bins_ary;
+    SV** elem;
+  CODE:
+    nbins = av_len(bins); /* av_len is like $#{}, but bins has nbins+1 elements */
+    Newx(RETVAL, 1, simple_histo_1d);
+    if( RETVAL == NULL ){
+      warn("unable to malloc simple_histo_1d");
+      XSRETURN_UNDEF;
+    }
+
+    RETVAL->nbins = nbins;
+    Newx(bins_ary, nbins+1, double);
+    RETVAL->bins = bins_ary;
+
+    for (i = 0; i <= nbins; ++i) {
+      elem = av_fetch(bins, i, 0);
+      if (elem == NULL) {
+        croak("Shouldn't happen");
+      }
+      bins_ary[i] = SvNV(*elem);
+      if (i != 0 && bins_ary[i-1] >= bins_ary[i]) {
+        Safefree(bins_ary);
+        Safefree(RETVAL);
+        croak("Bin edge %u is higher than bin edge %u. Must be strictly monotonically increasing", i-1, i);
+      }
+    }
+    RETVAL->min = bins_ary[0];
+    RETVAL->max = bins_ary[nbins];
+    RETVAL->width = RETVAL->max - RETVAL->min;
+    RETVAL->binsize = 0.;
+    RETVAL->overflow = 0.;
+    RETVAL->underflow = 0.;
+    RETVAL->total = 0.;
+    RETVAL->nfills = 0;
     Newxz(RETVAL->data, (int)RETVAL->nbins, double);
   OUTPUT:
     RETVAL
@@ -168,38 +115,31 @@ DESTROY(self)
     simple_histo_1d* self
   CODE:
     Safefree( (void*)self->data );
+    if (self->bins != NULL)
+      Safefree(self->bins);
     Safefree( (void*)self );
-
 
 simple_histo_1d*
 clone(self)
     SV* self
+  PREINIT:
+    const char* CLASS;
+  INIT:
+    HS_CLONE_GET_CLASS(CLASS, self, clone);
   CODE:
-    if (!sv_isobject(self)) {
-      croak("Cannot call clone() on non-object");
-    }
-    const char* CLASS = sv_reftype(SvRV(self), TRUE);
-    if ( sv_isobject(self) && (SvTYPE(SvRV(self)) == SVt_PVMG) ) {
-      RETVAL = histo_clone(aTHX_ (simple_histo_1d*)SvIV((SV*)SvRV(self)), 0);
-    } else {
-      croak( "%s::clone() -- self is not a blessed SV reference", CLASS );
-    }
+    RETVAL = histo_clone(aTHX_ (simple_histo_1d*)SvIV((SV*)SvRV(self)), 0);
   OUTPUT: RETVAL
 
 
 simple_histo_1d*
 new_alike(self)
     SV* self
+  PREINIT:
+    const char* CLASS;
+  INIT:
+    HS_CLONE_GET_CLASS(CLASS, self, new_alike);
   CODE:
-    if (!sv_isobject(self)) {
-      croak("Cannot call new_alike() on non-object");
-    }
-    const char* CLASS = sv_reftype(SvRV(self), TRUE);
-    if ( sv_isobject(self) && (SvTYPE(SvRV(self)) == SVt_PVMG) ) {
-      RETVAL = histo_clone(aTHX_ (simple_histo_1d*)SvIV((SV*)SvRV(self)), 1);
-    } else {
-      croak( "%s::new_alike() -- self is not a blessed SV reference", CLASS );
-    }
+    RETVAL = histo_clone(aTHX_ (simple_histo_1d*)SvIV((SV*)SvRV(self)), 1);
   OUTPUT: RETVAL
 
 
@@ -221,9 +161,8 @@ normalize(self, normalization = 1.)
     n = self->nbins;
     data = self->data;
     factor = normalization / self->total;
-    for (i = 0; i < n; ++i) {
+    for (i = 0; i < n; ++i)
       data[i] *= factor;
-    }
     self->total = normalization;
     self->overflow *= factor;
     self->underflow *= factor;
@@ -363,10 +302,15 @@ nbins(self)
   OUTPUT: RETVAL
 
 double
-binsize(self)
+binsize(self, ibin = 0)
     simple_histo_1d* self
+    unsigned int ibin
   CODE:
-    RETVAL = self->binsize;
+    HS_ASSERT_BIN_RANGE(self, ibin);
+    if (self->bins == NULL)
+      RETVAL = self->binsize;
+    else
+      RETVAL = self->bins[ibin+1] - self->bins[ibin];
   OUTPUT: RETVAL
 
 unsigned int
@@ -415,10 +359,8 @@ bin_content(self, ibin)
     simple_histo_1d* self
     unsigned int ibin
   CODE:
-    if (/*ibin < 0 ||*/ ibin >= self->nbins) {
-      croak("Bin outside histogram range");
-    }
-    RETVAL = (self->data)[ibin];
+    HS_ASSERT_BIN_RANGE(self, ibin);
+    RETVAL = self->data[ibin];
   OUTPUT: RETVAL
 
 
@@ -429,18 +371,27 @@ bin_centers(self)
     AV* av;
     SV* rv;
     int i, n;
-    double x, binsize;
+    double x;
   PPCODE:
     av = newAV();
     rv = (SV*)newRV((SV*)av);
     SvREFCNT_dec(av);
     n = self->nbins;
     av_fill(av, n-1);
-    binsize = self->binsize;
-    x = self->min + 0.5*binsize;
-    for (i = 0; i < n; ++i) {
-      av_store(av, i, newSVnv(x));
-      x += binsize;
+    if (self->bins == NULL) {
+      double binsize = self->binsize;
+      x = self->min + 0.5*binsize;
+      for (i = 0; i < n; ++i) {
+        av_store(av, i, newSVnv(x));
+        x += binsize;
+      }
+    }
+    else {
+      double* bins = self->bins;
+      for (i = 0; i < n; ++i) {
+        x = 0.5*(bins[i] + bins[i+1]);
+        av_store(av, i, newSVnv(x));
+      }
     }
     XPUSHs(sv_2mortal(rv));
 
@@ -450,10 +401,11 @@ bin_center(self, ibin)
     simple_histo_1d* self
     unsigned int ibin
   CODE:
-    if (/*ibin < 0 ||*/ ibin >= self->nbins) {
-      croak("Bin outside histogram range");
-    }
-    RETVAL = self->min + ((double)ibin + 0.5) * self->binsize;
+    HS_ASSERT_BIN_RANGE(self, ibin);
+    if (self->bins == NULL)
+      RETVAL = self->min + ((double)ibin + 0.5) * self->binsize;
+    else
+      RETVAL = 0.5*(self->bins[ibin] + self->bins[ibin+1]);
   OUTPUT: RETVAL
 
 
@@ -462,10 +414,11 @@ bin_lower_boundary(self, ibin)
     simple_histo_1d* self
     unsigned int ibin
   CODE:
-    if (/*ibin < 0 ||*/ ibin >= self->nbins) {
-      croak("Bin outside histogram range");
-    }
-    RETVAL = self->min + (double)ibin * self->binsize;
+    HS_ASSERT_BIN_RANGE(self, ibin);
+    if (self->bins == NULL)
+      RETVAL = self->min + (double)ibin * self->binsize;
+    else
+      RETVAL = self->bins[ibin];
   OUTPUT: RETVAL
 
 
@@ -474,10 +427,12 @@ bin_upper_boundary(self, ibin)
     simple_histo_1d* self
     unsigned int ibin
   CODE:
-    if (/*ibin < 0 ||*/ ibin >= self->nbins) {
+    if (/*ibin < 0 ||*/ ibin >= self->nbins)
       croak("Bin outside histogram range");
-    }
-    RETVAL = self->min + ((double)ibin + 1) * self->binsize;
+    if (self->bins == NULL)
+      RETVAL = self->min + ((double)ibin + 1) * self->binsize;
+    else
+      RETVAL = self->bins[ibin+1];
   OUTPUT: RETVAL
 
 
@@ -488,18 +443,25 @@ bin_lower_boundaries(self)
     AV* av;
     SV* rv;
     int i, n;
-    double x, binsize;
   PPCODE:
     av = newAV();
     rv = (SV*)newRV((SV*)av);
     SvREFCNT_dec(av);
     n = self->nbins;
     av_fill(av, n-1);
-    binsize = self->binsize;
-    x = self->min;
-    for (i = 0; i < n; ++i) {
-      av_store(av, i, newSVnv(x));
-      x += binsize;
+    if (self->bins == NULL) {
+      double binsize = self->binsize;
+      double x = self->min;
+      for (i = 0; i < n; ++i) {
+        av_store(av, i, newSVnv(x));
+        x += binsize;
+      }
+    }
+    else {
+      double* bins = self->bins;
+      for (i = 0; i < n; ++i) {
+        av_store(av, i, newSVnv(bins[i]));
+      }
     }
     XPUSHs(sv_2mortal(rv));
 
@@ -518,30 +480,33 @@ bin_upper_boundaries(self)
     SvREFCNT_dec(av);
     n = self->nbins;
     av_fill(av, n-1);
-    binsize = self->binsize;
-    x = self->min;
-    for (i = 0; i < n; ++i) {
-      x += binsize;
-      av_store(av, i, newSVnv(x));
+    if (self->bins == NULL) {
+      binsize = self->binsize;
+      x = self->min;
+      for (i = 0; i < n; ++i) {
+        x += binsize;
+        av_store(av, i, newSVnv(x));
+      }
+    }
+    else {
+      double* bins = self->bins;
+      for (i = 0; i < n; ++i) {
+        av_store(av, i, newSVnv(bins[i+1]));
+      }
     }
     XPUSHs(sv_2mortal(rv));
 
 
-void
+unsigned int
 find_bin(self, x)
     simple_histo_1d* self
     double x
-  PREINIT:
-    dTARG;
-  PPCODE:
-    if (x >= self->max) {
+  CODE:
+    if (x >= self->max || x < self->min) {
       XSRETURN_UNDEF;
     }
-    x -= self->min;
-    if (x < 0) {
-      XSRETURN_UNDEF;
-    }
-    XPUSHu( (UV)(x/self->binsize) );
+    RETVAL = histo_find_bin(self, x);
+  OUTPUT: RETVAL
 
 
 void
@@ -550,9 +515,7 @@ set_bin_content(self, ibin, content)
     unsigned int ibin
     double content
   PPCODE:
-    if (ibin >= self->nbins) {
-      croak("Histogram bin in access outside histogram size");
-    }
+    HS_ASSERT_BIN_RANGE(self, ibin);
     self->total += content - self->data[ibin];
     self->data[ibin] = content;
 
@@ -589,48 +552,81 @@ integral(self, from, to, type = 0)
     double* data;
     unsigned int i, n;
     double binsize;
+    bool invert = 0;
   CODE:
+    /* TODO nonconstant bins */
     if (from > to) {
       binsize = from; /* abuse as temp var */
       from = to;
       to = binsize;
+      invert = 1;
     }
 
     data = self->data;
     binsize = self->binsize;
 
+    /* FIXME handle both to/from being off limits on the same side*/
     if (to >= self->max)
       to = self->max;
     if (from < self->min)
       from = self->min;
 
+    /*for (i = 1; i < self->nbins; ++i)
+      printf("%u: %f ", i, data[i]);
+    printf("\n");
+    */
+
     switch(type) {
       case INTEGRAL_CONSTANT:
-        /* first (fractional) bin */
-        from = (from - self->min) / binsize;
-        i = (int)from;
-        from -= (double)i;
-        /* printf("First bin total content: %f\nCalc fractional: %f\nFirst bin index: %i\nfrom: %d\n", self->data[i], RETVAL, i, from); */
+        if (self->bins == NULL) {
+          /* first (fractional) bin */
+          from = (from - self->min) / binsize;
+          i = (int)from;
+          from -= (double)i;
 
-        /* last (fractional) bin */
-        to = (to - self->min) / binsize;
-        n = (int)to;
-        to -= (double)n;
-
-        if (i == n) {
-          RETVAL = (to-from)*binsize;
+          /* last (fractional) bin */
+          to = (to - self->min) / binsize;
+          n = (int)to;
+          to -= (double)n;
+          if (i == n) {
+            RETVAL = (to-from) * data[i];
+          }
+          else {
+            RETVAL = data[i] * (1.-from)
+                     + data[n] * to;
+            ++i;
+            for (; i < n; ++i)
+              RETVAL += data[i];
+          }
         }
-        else {
-          RETVAL = (data[i] * binsize) * (1.-from)
-                   + (data[n] * binsize) * to;
-          ++i;
-          for (; i < n; ++i)
-            RETVAL += data[i] * binsize;
+        else { /* variable bin size */
+          /* TODO optimize */
+          double* bins = self->bins;
+          unsigned int nbins = self->nbins;
+
+          i = histo_find_bin_nonconstant_internal(from, nbins, bins);
+          binsize = (bins[i+1]-bins[i]);
+          RETVAL = (bins[i+1]-from)/binsize * data[i]; /* distance from 'from' to upper boundary of bin times data in bin */
+
+          n = histo_find_bin_nonconstant_internal(to, nbins, bins);
+          if (i == n) {
+            RETVAL -= (bins[i+1]-to)/binsize * data[i];
+          }
+          else {
+            ++i;
+            for (; i < n; ++i) {
+              RETVAL += data[i];
+            }
+            binsize = bins[n+1]-bins[n];
+            RETVAL += data[n] * (to-bins[n])/binsize;
+          }
         }
         break;
       default:
         croak("Invalid integration type");
     };
+    if (invert)
+      RETVAL *= -1.;
   OUTPUT: RETVAL
 
 
@@ -638,21 +634,30 @@ double
 mean(self)
     simple_histo_1d* self
   PREINIT:
-    double x, binsize;
+    double x;
     double* data;
     unsigned int i, n;
   CODE:
-    if (self->total == 0) {
+    if (self->total == 0)
       XSRETURN_UNDEF;
-    }
-    binsize = self->binsize;
+
+    RETVAL = 0.;
     data = self->data;
     n = self->nbins;
-    x = self->min + 0.5*binsize;
-    RETVAL = 0.;
-    for (i = 0; i < n; ++i) {
-      RETVAL += data[i] * x;
-      x += binsize;
+    if (self->bins == NULL) {
+      double binsize = self->binsize;
+      x = self->min + 0.5*binsize;
+      for (i = 0; i < n; ++i) {
+        RETVAL += data[i] * x;
+        x += binsize;
+      }
+    }
+    else { /* non-constant binsize */
+      double* bins = self->bins;
+      for (i = 0; i < n; ++i) {
+        x = 0.5*(bins[i] + bins[i+1]);
+        RETVAL += data[i] * x;
+      }
     }
     RETVAL /= self->total;
   OUTPUT: RETVAL
@@ -690,9 +695,10 @@ _get_info(self)
     simple_histo_1d* self
   PREINIT:
     SV* data_ary;
+    SV* bins_ary;
   PPCODE:
-    /* min, max, nbins, nfills, overflow, underflow, dataref */
-    EXTEND(SP, 7);
+    /* min, max, nbins, nfills, overflow, underflow, dataref, binsref*/
+    EXTEND(SP, 8);
     mPUSHn(self->min);
     mPUSHn(self->max);
     mPUSHu(self->nbins);
@@ -701,4 +707,21 @@ _get_info(self)
     mPUSHn(self->underflow);
     data_ary = histo_data_av(aTHX_ self);
     XPUSHs(sv_2mortal(data_ary));
+    if (self->bins == NULL)
+      bins_ary = &PL_sv_undef;
+    else
+      bins_ary = sv_2mortal(histo_bins_av(aTHX_ self));
+    XPUSHs(bins_ary);
+
+
+simple_histo_1d*
+cumulative(self)
+    SV* self
+  PREINIT:
+    const char* CLASS;
+  INIT:
+    HS_CLONE_GET_CLASS(CLASS, self, cumulative);
+  CODE:
+    RETVAL = histo_cumulative(aTHX_ (simple_histo_1d*)SvIV((SV*)SvRV(self)));
+  OUTPUT: RETVAL
 

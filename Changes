@@ -1,16 +1,14 @@
 Revision history for Perl extension Math::SimpleHisto::XS.
 
-0.01  Sun May 15 23:00:00 2011
-  - original version
-
-0.02  Mon May 16 12:00:00 2011
-  - Minor POD/doc fix
-
-0.03  Tue May 16 19:00:00 2011
-  - Test fix (proper use of SKIP)
-
-0.04  Wed May 18  2:00:00 2011
-  - Test fix (proper use of eval, DOH)
+1.01  Sun May 22 21:48:00 2011
+  - Version checks when deserializing
+    Note: Future versions of this module will try to be able to
+    deserialize the histograms from earlier versions. The other
+    way around is not going to work. The indicator for forwards=
+    incompatible changes is a major version bump (here: 0 => 1)
+  - Variable bin-size histograms.
+    (Requiring a total makeover and heavy refactoring)
+  - $hist->cumulative to get the cumulation of the histogram
 
 0.05  Thu May 18 18:30:00 2011
   - More documentation on dumping/serializing
@@ -19,3 +17,14 @@ Revision history for Perl extension Math::SimpleHisto::XS.
   - Fast 'native_pack' serialization format
   - Includes benchmark script for serialization
 
+0.04  Wed May 18  2:00:00 2011
+  - Test fix (proper use of eval, DOH)
+
+0.03  Tue May 16 19:00:00 2011
+  - Test fix (proper use of SKIP)
+
+0.02  Mon May 16 12:00:00 2011
+  - Minor POD/doc fix
+
+0.01  Sun May 15 23:00:00 2011
+  - original version

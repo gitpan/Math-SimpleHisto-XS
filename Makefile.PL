@@ -4,13 +4,18 @@ use ExtUtils::MakeMaker;
 # the contents of the Makefile that is written.
 my $name = 'Math::SimpleHisto::XS';
 my $define = '';
-$define = '-Wall -Wextra' if grep {/--debug/} @ARGV;
+if (grep {/--debug/} @ARGV) {
+  $define = '-Wall -Wextra -O0 -g';
+}
+else {
+  $define = '-O2';
+}
 
 WriteMakefile(
     NAME              => $name,
     VERSION_FROM      => 'lib/Math/SimpleHisto/XS.pm', # finds $VERSION
     PREREQ_PM         => {
-      #'ExtUtils::Constant' => '0',
+      'ExtUtils::ParseXS' => '0.2201',
     },
     ($] >= 5.005 ?
       (ABSTRACT_FROM  => 'lib/Math/SimpleHisto/XS.pm', # retrieve abstract from module
