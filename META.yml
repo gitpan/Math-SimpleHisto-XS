@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               Math-SimpleHisto-XS
-version:            1.01
+version:            1.02
 abstract:           Simple histogramming, but kinda fast
 author:
     - Steffen Mueller <smueller@cpan.org>
@@ -12,6 +12,7 @@ build_requires:
     ExtUtils::MakeMaker:  0
 requires:
     ExtUtils::ParseXS:  0.2201
+    Test::More:         0.88
 no_index:
     directory:
         - t
