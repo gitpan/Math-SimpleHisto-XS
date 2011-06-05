@@ -4,10 +4,12 @@ use strict;
 use warnings;
 use Carp qw(croak);
 
-our $VERSION = '1.02'; # Committed to floating point version numbers!
+our $VERSION = '1.03'; # Committed to floating point version numbers!
 
 require XSLoader;
 XSLoader::load('Math::SimpleHisto::XS', $VERSION);
+
+require Math::SimpleHisto::XS::RNG;
 
 require Exporter;
 our @ISA = qw(Exporter);
@@ -366,13 +368,6 @@ creates a histogram with four bins:
   [4.0, 6.0)
   [6.0, 8.5)
 
-=head2 C<clone>, C<new_alike>
-
-C<$hist-E<gt>clone()> clones the object entirely.
-
-C<$hist-E<gt>new_alike()> clones the parameters of the object,
-but resets the contents of the clone.
-
 =head2 C<fill>
 
 Fill data into the histogram. Takes one or two arguments. The first must be the
@@ -471,6 +466,30 @@ of each bin in the histogram to the number in the respective
 array element. Number of elements needs to match the number of bins
 in the histogram.
 
+=head1 CLONING
+
+=head2 C<clone>, C<new_alike>
+
+C<$hist-E<gt>clone()> clones the object entirely.
+
+C<$hist-E<gt>new_alike()> clones the parameters of the object,
+but resets the contents of the clone.
+
+=head2 C<new_from_bin_range>, C<new_alike_from_bin_range>
+
+C<$hist-E<gt>new_from_bin_range($first_bin, $last_bin)>
+creates a copy of the histogram including all bins from C<$first_bin>
+to C<$last_bin>. For example,
+C<$hist-E<gt>new_from_bin_range(50, 199)> would create a new histogram
+with 150 bins (the range is inclusive!) and copy the respective data
+from the original histogram. All bin contents outside the range will
+be added to the under- or overflow respectively. Specifying a last
+bin above the highest bin number of the source histogram yields
+a new histogram running up to the highest bin of the source.
+
+C<$hist-E<gt>new_alike_from_bin_range($first_bin, $last_bin)>
+does the same, but resets all contents (like C<new_alike).
+
 =head1 CALCULATIONS
 
 =head2 C<integral>
@@ -504,14 +523,62 @@ Normalization defaults to C<1>.
 
 =head2 C<cumulative>
 
-Calculates the cumulative histogram of the histogram and returns
-it as a B<new> histogram object.
+Calculates the cumulative histogram of the invocant
+histogram and returns it as a B<new> histogram object.
 
 The cumulative (if done in Perl) is:
 
   for my $i (0..$n) {
     $content[$i] = sum(map $original_content[$_], 0..$i);
   }
+
+As a convenience, if a numeric argument is passed to the method,
+the B<OUTPUT> histogram will be normalized to that number B<BEFORE>
+calculating the cumulation. This means that
+
+  my $cumu = $histo->cumulative(1.);
+
+gives a cumulative histogram where the last bin contains exactly
+C<1>.
+
+=head2 C<multiply_constant>
+
+Scales all bin contents, as well as over- and underflow
+by the given constant.
+
+=head1 RANDOM NUMBERS
+
+This module comes with a Mersenne twister-based Random Number Generator
+that follows that in the C<Math::Random::MT> module.
+It is available in the C<Math::SimpleHisto::XS::RNG>
+class. You can create a new RNG by passing one or more
+integers to the C<Math::SimpleHisto::XS::RNG-E<gt>new(...)>
+method. The object's C<rand()> method works like the normal
+Perl C<rand($x)> function.
+
+You can use a histogram as a source for random numbers that
+follow the distribution of the histogram. In order to do
+this, you need to calculate the cumulative histogram of your
+histogram and normalize it in such a way that the content
+of the last bin is exactly C<1>. This is the same as calculating
+the cumulative from a histogram that was previously normalized
+to C<1>. You can achieve this easily
+using the C<cumulative()> method documented above:
+
+  my $norm_cumulative = $hist->cumulative(1);
+  push @random_like_hist = $norm_cumulative->rand();
+
+If you pass a C<Math::SimpleHisto::XS::RNG> object to
+the call to C<rand()>, that random number generator will be used.
+
+=head2 C<rand>
+
+Optionally given a L<Math::SimpleHisto::XS::RNG> object
+(a random number generator), this
+returns a random number that is drawn from the
+distribution of the histogram.
+B<THIS WORKS ONLY ON THE APROPRIATELY
+NORMALIZED CUMULATIVE HISTOGRAM, SEE ABOVE!>
 
 =head1 SERIALIZATION
 
@@ -607,6 +674,11 @@ L<JSON> or L<YAML::Tiny> modules.
 You may want to use the convenient L<Storable> module for transparent
 serialization of nested data structures containing objects
 of this class.
+
+=head1 ACKNOWLEDGMENTS
+
+This module contains some code written by Abhijit Menon-Sen,
+who wrote C<Math::Random::MT>.
 
 =head1 AUTHOR
 
