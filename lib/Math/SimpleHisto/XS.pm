@@ -4,7 +4,7 @@ use strict;
 use warnings;
 use Carp qw(croak);
 
-our $VERSION = '1.03'; # Committed to floating point version numbers!
+our $VERSION = '1.10'; # Committed to floating point version numbers!
 
 require XSLoader;
 XSLoader::load('Math::SimpleHisto::XS', $VERSION);
@@ -379,10 +379,11 @@ If the coordinate is a reference to an array, it is assumed to contain many
 data points that are to be filled into the histogram. In this case, if the
 weight is used, it must also be a reference to an array of weights.
 
-=head2 C<min>, C<max>, C<nbins>, C<width>
+=head2 C<min>, C<max>, C<nbins>, C<width>, C<highest_bin>
 
 Return static histogram attributes: minimum coordinate, maximum coordinate,
-number of bins, total width of the histogram, and the size of each bin.
+number of bins, total width of the histogram, and the index of the
+highest bin in the histogram (which is just C<nbins - 1>).
 
 =head2 C<underflow>, C<overflow>
 
@@ -510,10 +511,34 @@ the range of the histogram.
 
 =head2 C<mean>
 
-Calculates the (weighted) mean of the histogram contents.
+Calculates the mean of the histogram contents.
 
 Note that the result is not usually the same as if you calculated
 the mean of the input data directly due to the effect of the binning.
+
+=head2 C<median>
+
+Calculates and returns the estimated median of the data in the
+histogram. Achieves sub-bin-size resolution by estimating the median
+position within the bin from the sum of data below and above the
+median bin.
+
+The estimation is necessary since the true median requires the
+original data.
+
+=head2 C<median_absolute_deviation>
+
+I<WARNING> this is apparently still crashy when facing weird data!
+
+Calculates and returns an estimate of the median absolute
+deviation (MAD) of the histogram. This is a fairly expensive
+operation.
+
+Optionally, as an optimization, you can pass in the previously
+calculated median estimate of the histogram to prevent it
+from having to be recalculated. Make sure you pass in the
+correct value or the behaviour of this method is undefined
+and might even crash your perl!
 
 =head2 C<normalize>
 
@@ -533,12 +558,12 @@ The cumulative (if done in Perl) is:
   }
 
 As a convenience, if a numeric argument is passed to the method,
-the B<OUTPUT> histogram will be normalized to that number B<BEFORE>
+the B<OUTPUT> histogram will be normalized using number B<BEFORE>
 calculating the cumulation. This means that
 
   my $cumu = $histo->cumulative(1.);
 
-gives a cumulative histogram where the last bin contains exactly
+gives a cumulative histogram where the I<last bin> contains exactly
 C<1>.
 
 =head2 C<multiply_constant>
@@ -548,8 +573,8 @@ by the given constant.
 
 =head1 RANDOM NUMBERS
 
-This module comes with a Mersenne twister-based Random Number Generator
-that follows that in the C<Math::Random::MT> module.
+This module comes with a Mersenne twister-based Random Number
+Generator that follows that in the C<Math::Random::MT> module.
 It is available in the C<Math::SimpleHisto::XS::RNG>
 class. You can create a new RNG by passing one or more
 integers to the C<Math::SimpleHisto::XS::RNG-E<gt>new(...)>
@@ -557,16 +582,9 @@ method. The object's C<rand()> method works like the normal
 Perl C<rand($x)> function.
 
 You can use a histogram as a source for random numbers that
-follow the distribution of the histogram. In order to do
-this, you need to calculate the cumulative histogram of your
-histogram and normalize it in such a way that the content
-of the last bin is exactly C<1>. This is the same as calculating
-the cumulative from a histogram that was previously normalized
-to C<1>. You can achieve this easily
-using the C<cumulative()> method documented above:
+follow the distribution of the histogram.
 
-  my $norm_cumulative = $hist->cumulative(1);
-  push @random_like_hist = $norm_cumulative->rand();
+  push @random_like_hist, $hist->rand() for 1..100000;
 
 If you pass a C<Math::SimpleHisto::XS::RNG> object to
 the call to C<rand()>, that random number generator will be used.
@@ -577,8 +595,6 @@ Optionally given a L<Math::SimpleHisto::XS::RNG> object
 (a random number generator), this
 returns a random number that is drawn from the
 distribution of the histogram.
-B<THIS WORKS ONLY ON THE APROPRIATELY
-NORMALIZED CUMULATIVE HISTOGRAM, SEE ABOVE!>
 
 =head1 SERIALIZATION
 

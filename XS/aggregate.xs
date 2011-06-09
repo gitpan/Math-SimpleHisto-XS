@@ -97,7 +97,7 @@ mean(self)
     double* data;
     unsigned int i, n;
   CODE:
-    if (self->total == 0)
+    if (self->nfills == 0)
       XSRETURN_UNDEF;
 
     RETVAL = 0.;
@@ -120,4 +120,60 @@ mean(self)
     }
     RETVAL /= self->total;
   OUTPUT: RETVAL
+
+double
+median(self)
+    simple_histo_1d* self
+  PREINIT:
+  CODE:
+    if (self->nfills == 0)
+      XSRETURN_UNDEF;
+    RETVAL = histo_median(aTHX_ self);
+  OUTPUT: RETVAL
+
+
+double
+median_absolute_deviation(self, ...)
+    simple_histo_1d* self
+  PREINIT:
+    double median;
+    double *x, *data;
+    unsigned int i, n;
+    simple_histo_1d* madhist;
+  CODE:
+    if (self->nfills == 0)
+      XSRETURN_UNDEF;
+    
+    if (items == 2)
+      median = SvNV(ST(1));
+    else if (items == 1)
+      median = histo_median(aTHX_ self);
+
+    /* FIXME think hard about the optimal nbins here. Also wrt. variable bin size */
+    madhist = histo_alloc_new_fixed_bins(aTHX_ self->nbins, 0., self->width);
+    
+    n = self->nbins;
+    data = self->data;
+    Newx(x, n, double);
+    if (self->bins == 0) {
+      double min = self->min;
+      double binsize = self->binsize;
+      for (i = 0; i < n; ++i) {
+        /* abs(median-bin_center) */
+        x[i] = fabs( median - (min + binsize * (i + 0.5)) );
+      }
+    }
+    else { /* variable bin size */
+      double* bins = self->bins;
+      for (i = 0; i < n; ++i) {
+        x[i] = fabs( median - 0.5*(bins[i]+bins[i+1]) );
+      }
+    }
+    histo_fill(madhist, n, x, data);
+    Safefree(x);
+
+    RETVAL = histo_median(aTHX_ madhist);
+    HS_DEALLOCATE(madhist);
+  OUTPUT: RETVAL
+
 

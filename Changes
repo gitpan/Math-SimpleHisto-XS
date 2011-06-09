@@ -1,5 +1,21 @@
 Revision history for Perl extension Math::SimpleHisto::XS.
 
+1.10  Thu Jun  9 13:07:00 2011
+  * This release contains incompatible changes to previous releases *
+  - INCOMPATBLE CHANGE: The rand() method now works on the
+    histogram itself instead of its cumulation. This works by
+    lazily constructing and caching a cumulative histogram
+    internally and greatly reduces the chance for user errors:
+    Before:
+      my $ch = $hist->cumulative(1);
+      push @rand_like_hist, $ch->rand for 1..100000;
+    After:
+      push @rand, $hist->rand for 1..100000;
+  - Implemented the median() and median_absolute_deviation()
+    methods to calculate estimates of those two quantities.
+  - highest_bin() returns the index of the highest bin in the
+    histogram.
+
 1.03  Wed Jun  1 21:45:00 2011
   - The rand() method, when called on a cumulative distribution,
     returns random numbers sampled from the source distribution.
