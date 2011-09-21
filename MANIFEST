@@ -33,4 +33,5 @@ XS/rdgen.xs
 xt/bench.pl
 xt/bench_dumping.pl
 xt/histo_rand.pl
-META.yml                                 Module meta-data (added by MakeMaker)
+META.yml                                 Module YAML meta-data (added by MakeMaker)
+META.json                                Module JSON meta-data (added by MakeMaker)
