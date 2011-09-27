@@ -6,13 +6,18 @@
 #include "ppport.h"
 
 #include "histogram.h"
-#include "histogram_agg.h"
+#include "histo_perl_interf.h"
 
 #include "mt.h"
 #include "const-c.inc"
 
-/* more HS_* macros to be found in histogram.h */
+/* More HS_* macros to be found in histogram.h. Those here
+ * are more chummy with perl than those in histogram.h, which only
+ * currently use the memory allocation macros of perl. */
 
+/* Ideally, HS_ASSERT_BIN_RANGE would be part of the histogram.h
+ * API, but given that we know the unsigned data type here AND have
+ * access to perl's croak conveniently, that seems premature cleanup. */
 #define HS_ASSERT_BIN_RANGE(self, i) STMT_START {                                     \
   if (/* i < 0 || */ i >= self->nbins) {                                              \
     croak("Bin %u outside histogram range (highest bin index is %u", i, self->nbins); \
@@ -62,10 +67,8 @@ multiply_constant(self, factor = 1.)
     simple_histo_1d* self
     double factor
   CODE:
-    if (factor < 0.) {
+    if (factor < 0.)
       croak("Cannot multiply histogram with negative value %f", factor);
-    }
-    HS_INVALIDATE_CUMULATIVE(self);
     histo_multiply_constant(self, factor);
 
 
@@ -74,20 +77,16 @@ normalize(self, normalization = 1.)
     simple_histo_1d* self
     double normalization
   CODE:
-    if (normalization <= 0.) {
+    if (normalization <= 0.)
       croak("Cannot normalize to %f", normalization);
-    }
-    if (self->total == 0.) {
+    if (self->total == 0.)
       croak("Cannot normalize histogram without data");
-    }
-    HS_INVALIDATE_CUMULATIVE(self);
     histo_multiply_constant(self, normalization / self->total);
 
 void
 fill(self, ...)
     simple_histo_1d* self
   CODE:
-    HS_INVALIDATE_CUMULATIVE(self);
     if (items == 2) {
       SV* const x_tmp = ST(1);
       SvGETMAGIC(x_tmp);
@@ -161,6 +160,91 @@ fill(self, ...)
         double x = SvNV(ST(1));
         double w = SvNV(ST(2));
         histo_fill(self, 1, &x, &w);
+      }
+    }
+    else {
+      croak("Invalid number of arguments to fill(self, ...)");
+    }
+
+void
+fill_by_bin(self, ...)
+    simple_histo_1d* self
+  CODE:
+    HS_INVALIDATE_CUMULATIVE(self);
+    if (items == 2) {
+      SV* const x_tmp = ST(1);
+      SvGETMAGIC(x_tmp);
+      if (SvROK(x_tmp) && SvTYPE(SvRV(x_tmp)) == SVt_PVAV) {
+        int i, n;
+        SV** sv;
+        int* ibin;
+        AV* av = (AV*)SvRV(x_tmp);
+        n = av_len(av);
+        Newx(ibin, n+1, int);
+        for (i = 0; i <= n; ++i) {
+          sv = av_fetch(av, i, 0);
+          if (sv == NULL) {
+            Safefree(ibin);
+            croak("Shouldn't happen");
+          }
+          ibin[i] = SvIV(*sv);
+        }
+        histo_fill_by_bin(self, n+1, ibin, NULL);
+        Safefree(ibin);
+      }
+      else {
+        const int ibin = SvUV(ST(1));
+        histo_fill_by_bin(self, 1, &ibin, NULL);
+      }
+    }
+    else if (items == 3) {
+      SV* const x_tmp = ST(1);
+      SV* const w_tmp = ST(2);
+      SvGETMAGIC(x_tmp);
+      SvGETMAGIC(w_tmp);
+      if (SvROK(x_tmp) && SvTYPE(SvRV(x_tmp)) == SVt_PVAV) {
+        int i, n;
+        SV** sv;
+        int *ibin;
+        double *w;
+        AV *xav, *wav;
+        if (!SvROK(w_tmp) || SvTYPE(SvRV(x_tmp)) != SVt_PVAV) {
+          croak("Need array of weights if using array of bin numbers");
+        }
+        xav = (AV*)SvRV(x_tmp);
+        wav = (AV*)SvRV(w_tmp);
+        n = av_len(xav);
+        if (av_len(wav) != n) {
+          croak("ibin and w array lengths differ");
+        }
+
+        Newx(ibin, n+1, int);
+        Newx(w, n+1, double);
+        for (i = 0; i <= n; ++i) {
+          sv = av_fetch(xav, i, 0);
+          if (sv == NULL) {
+            Safefree(ibin);
+            Safefree(w);
+            croak("Shouldn't happen");
+          }
+          ibin[i] = SvIV(*sv);
+
+          sv = av_fetch(wav, i, 0);
+          if (sv == NULL) {
+            Safefree(ibin);
+            Safefree(w);
+            croak("Shouldn't happen");
+          }
+          w[i] = SvNV(*sv);
+        }
+        histo_fill_by_bin(self, n+1, ibin, w);
+        Safefree(ibin);
+        Safefree(w);
+      }
+      else {
+        int ibin = SvIV(ST(1));
+        double w = SvNV(ST(2));
+        histo_fill_by_bin(self, 1, &ibin, &w);
       }
     }
     else {
@@ -263,6 +347,9 @@ set_all_bin_contents(self, new_data)
     double* data;
     SV** elem;
   CODE:
+    /* While this would be nicer in the histogram API, it will be much faster
+     * to access the AV* on the fly instead of doing blanket conversion to remove
+     * dependence on perl data structures, so this stays here for the time being. */
     HS_INVALIDATE_CUMULATIVE(self);
     n = self->nbins;
     if ((unsigned int)(av_len(new_data)+1) != n) {
@@ -294,6 +381,7 @@ set_bin_content(self, ibin, content)
     unsigned int ibin
     double content
   PPCODE:
+    /* Would be nicer in the API, but again, this is faster. */
     HS_ASSERT_BIN_RANGE(self, ibin);
     HS_INVALIDATE_CUMULATIVE(self);
     self->total += content - self->data[ibin];
@@ -388,7 +476,7 @@ rand(self, ...)
     cum_hist = self->cumulative_hist;
 
     /* This all operates on the cumulative histogram */
-    ibin = rndval < cum_hist->data[0] ? 0 : histo_find_bin_nonconstant_internal(rndval, cum_hist->nbins, cum_hist->data);
+    ibin = rndval < cum_hist->data[0] ? 0 : find_bin_nonconstant(rndval, cum_hist->nbins, cum_hist->data);
     if (cum_hist->bins == 0) { /* constant bin size */
       retval = cum_hist->min + cum_hist->binsize * (double)(ibin+1);
       if (rndval > cum_hist->data[ibin]) {
