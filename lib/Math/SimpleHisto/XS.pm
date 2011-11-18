@@ -4,7 +4,7 @@ use strict;
 use warnings;
 use Carp qw(croak);
 
-our $VERSION = '1.24'; # Committed to floating point version numbers!
+our $VERSION = '1.25'; # Committed to floating point version numbers!
 
 require XSLoader;
 XSLoader::load('Math::SimpleHisto::XS', $VERSION);
@@ -507,7 +507,7 @@ bin above the highest bin number of the source histogram yields
 a new histogram running up to the highest bin of the source.
 
 C<$hist-E<gt>new_alike_from_bin_range($first_bin, $last_bin)>
-does the same, but resets all contents (like C<new_alike).
+does the same, but resets all contents (like C<new_alike>).
 
 =head1 CALCULATIONS
 
