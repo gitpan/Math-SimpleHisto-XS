@@ -241,36 +241,76 @@ void
 histo_fill(simple_histo_1d* self, unsigned int n, const double* x_in, const double* w_in)
 {
   unsigned int i;
-  double min = self->min, max = self->max, binsize = self->binsize, x, w;
+  double min = self->min, max = self->max, binsize = self->binsize, x;
   double *data = self->data;
   double *bins = self->bins;
 
   HS_INVALIDATE_CUMULATIVE(self);
 
-  for (i = 0; i < n; ++i) {
-    self->nfills++;
-    x = x_in[i];
+  /* Code duplication for performance */
+#define HANDLE_OVERFLOW \
+      if (UNLIKELY( x >= max )) { \
+        self->overflow += w; \
+        continue; \
+      } \
+      else if (UNLIKELY( x < min )) { \
+        self->underflow += w; \
+        continue; \
+      }
 
-    if (w_in == NULL) w = 1;
-    else              w = w_in[i];
-
-    if (x >= max) {
-      self->overflow += w;
-      continue;
-    }
-    else if (x < min) {
-      self->underflow += w;
-      continue;
-    }
-
-    self->total += w;
+  if (w_in == NULL) {
+    const double w = 1;
     if (bins == NULL) {
-      data[(int)((x-min)/binsize)] += w;
+      for (i = 0; i < n; ++i) {
+        self->nfills++;
+        x = x_in[i];
+
+        HANDLE_OVERFLOW
+
+        self->total += w;
+        data[(int)((x-min)/binsize)] += w;
+      }
     }
     else {
-      data[find_bin_nonconstant(x, self->nbins, self->bins)] += w;
+      for (i = 0; i < n; ++i) {
+        self->nfills++;
+        x = x_in[i];
+
+        HANDLE_OVERFLOW
+
+        self->total += w;
+        data[find_bin_nonconstant(x, self->nbins, self->bins)] += w;
+      }
     }
   }
+  else {
+    double w;
+    if (bins == NULL) {
+      for (i = 0; i < n; ++i) {
+        self->nfills++;
+        x = x_in[i];
+        w = w_in[i];
+
+        HANDLE_OVERFLOW
+
+        self->total += w;
+        data[(int)((x-min)/binsize)] += w;
+      }
+    }
+    else {
+      for (i = 0; i < n; ++i) {
+        self->nfills++;
+        x = x_in[i];
+        w = w_in[i];
+
+        HANDLE_OVERFLOW
+
+        self->total += w;
+        data[find_bin_nonconstant(x, self->nbins, self->bins)] += w;
+      }
+    }
+  }
+#undef HANDLE_OVERFLOW
 }
 
 
@@ -366,58 +406,142 @@ histo_multiply_constant(simple_histo_1d* self, double constant)
 #define MY_FLOAT_NE_EPS(a, b, eps) ((a) + (eps) <= (b) || (a) - (eps) >= (b))
 #define MY_FLOAT_NE(a, b) (MY_FLOAT_NE_EPS(a, b, 1.e-9))
 
-bool
-histo_add_histogram(simple_histo_1d* target, simple_histo_1d* to_add)
+STATIC bool S_histogram_bin_equality(simple_histo_1d *h1, simple_histo_1d *h2)
 {
-  unsigned int i, n;
-  double *d_target;
-  double *d_to_add;
-
-  /* we're optimistic */
-  n = target->nbins;
-
-  if (target->bins == NULL) {
+  if (h1->bins == NULL) {
     /* fixed bins */
-    if ( to_add->bins != NULL
-         || target->nbins != target->nbins
-         || MY_FLOAT_NE(target->min, to_add->min)
-         || MY_FLOAT_NE(target->max, to_add->max) ) {
+    if ( h2->bins != NULL
+         || h1->nbins != h2->nbins
+         || MY_FLOAT_NE(h1->min, h2->min)
+         || MY_FLOAT_NE(h1->max, h2->max) )
+    {
       return 0;
     }
   }
   else { /* variable bins */
-    if ( to_add->bins == NULL 
-          || target->nbins != to_add->nbins) {
-      return 0;
-    }
+    double *dh1;
+    double *dh2;
+    unsigned int i;
+    const unsigned int n = h1->nbins;
 
-    /* abuse double*'s a bit */
-    d_target = target->bins;
-    d_to_add = to_add->bins;
+    if ( h2->bins == NULL || n != h2->nbins)
+      return 0;
+
+    dh1 = h1->bins;
+    dh2 = h2->bins;
 
     for (i = 0; i < n; ++i) {
-      if (MY_FLOAT_NE(d_target[i], d_to_add[i])) {
-        printf("%u: %.12f %.12f\n", i, d_target[i], d_to_add[i]);
+      if (MY_FLOAT_NE(dh1[i], dh2[i]))
         return 0;
-      }
     }
   }
+}
 
-  HS_INVALIDATE_CUMULATIVE(target); /* Adding invalidates the cache. */
+
+STATIC bool
+S_add_sub_histogram(simple_histo_1d* target, simple_histo_1d* to_add, double factor)
+{
+  unsigned int i;
+  double *d_target;
+  double *d_to_add;
+
+  const unsigned int n = target->nbins;
+
+  S_histogram_bin_equality(target, to_add);
+
+  /* Adding histograms invalidates the cache. */
+  HS_INVALIDATE_CUMULATIVE(target);
 
   d_target = target->data;
   d_to_add = to_add->data;
 
   for (i = 0; i < n; ++i)
-    d_target[i] += d_to_add[i];
+    d_target[i] += d_to_add[i] * factor;
 
-  target->total     += to_add->total;
-  target->overflow  += to_add->overflow;
-  target->underflow += to_add->underflow;
+  target->total     += to_add->total * factor;
+  target->overflow  += to_add->overflow * factor;
+  target->underflow += to_add->underflow * factor;
   target->nfills    += to_add->nfills;
 
   return 1;
 }
+
+
+bool
+histo_add_histogram(simple_histo_1d* target, simple_histo_1d* to_add)
+{
+  return S_add_sub_histogram(target, to_add, 1.);
+}
+
+
+bool
+histo_subtract_histogram(simple_histo_1d* target, simple_histo_1d* to_subtract)
+{
+  return S_add_sub_histogram(target, to_subtract, -1.);
+}
+
+
+bool
+histo_multiply_histogram(simple_histo_1d* target, simple_histo_1d* to_multiply)
+{
+  unsigned int i;
+  double *d_target;
+  double *d_to_multiply;
+
+  const unsigned int n = target->nbins;
+
+  S_histogram_bin_equality(target, to_multiply);
+
+  /* Adding histograms invalidates the cache. */
+  HS_INVALIDATE_CUMULATIVE(target);
+
+  d_target = target->data;
+  d_to_multiply = to_multiply->data;
+
+  target->total = 0.;
+  for (i = 0; i < n; ++i) {
+    d_target[i] *= d_to_multiply[i];
+    target->total += d_target[i];
+  }
+
+  target->overflow  *= to_multiply->overflow;
+  target->underflow *= to_multiply->underflow;
+  target->nfills    += to_multiply->nfills;
+
+  return 1;
+}
+
+
+bool
+histo_divide_histogram(simple_histo_1d* target, simple_histo_1d* to_divide)
+{
+  unsigned int i;
+  double *d_target;
+  double *d_to_divide;
+
+  const unsigned int n = target->nbins;
+
+  S_histogram_bin_equality(target, to_divide);
+
+  /* Adding histograms invalidates the cache. */
+  HS_INVALIDATE_CUMULATIVE(target);
+
+  d_target = target->data;
+  d_to_divide = to_divide->data;
+
+  target->total = 0.;
+  for (i = 0; i < n; ++i) {
+    d_target[i] /= d_to_divide[i];
+    target->total += d_target[i];
+  }
+
+  target->overflow  /= to_divide->overflow;
+  target->underflow /= to_divide->underflow;
+  target->nfills    += to_divide->nfills;
+
+  return 1;
+}
+
 
 simple_histo_1d*
 histo_rebin(pTHX_ simple_histo_1d* self, unsigned int rebin_factor)

@@ -73,15 +73,36 @@ multiply_constant(self, factor = 1.)
     histo_multiply_constant(self, factor);
 
 void
-add_histogram(self, to_add)
+add_histogram(self, operand)
     simple_histo_1d* self
-    simple_histo_1d* to_add
+    simple_histo_1d* operand
+  ALIAS:
+    subtract_histogram = 1
+    multiply_histogram = 2
+    divide_histogram = 3
   PREINIT:
-    bool added_ok;
+    bool ok;
   CODE:
-    added_ok = histo_add_histogram(self, to_add);
-    if (!added_ok) {
-      croak("Failed to add incompatible histogram. Binning not the same?");
+    if (ix == 0)
+      ok = histo_add_histogram(self, operand);
+    else if (ix == 1)
+      ok = histo_subtract_histogram(self, operand);
+    else if (ix == 2)
+      ok = histo_multiply_histogram(self, operand);
+    else
+      ok = histo_divide_histogram(self, operand);
+
+    if (!ok) {
+      char *reason;
+      if (ix == 0)
+        reason = "add";
+      else if (ix == 1)
+        reason = "subtract";
+      else if (ix == 2)
+        reason = "multiply";
+      else
+        reason = "divide";
+      croak("Failed to %s incompatible histogram. Binning not the same?", reason);
     }
 
 void
@@ -111,7 +132,7 @@ fill(self, ...)
         Newx(x, n+1, double);
         for (i = 0; i <= n; ++i) {
           sv = av_fetch(av, i, 0);
-          if (sv == NULL) {
+          if (UNLIKELY( sv == NULL )) {
             Safefree(x);
             croak("Shouldn't happen");
           }
@@ -135,13 +156,13 @@ fill(self, ...)
         SV** sv;
         double *x, *w;
         AV *xav, *wav;
-        if (!SvROK(w_tmp) || SvTYPE(SvRV(x_tmp)) != SVt_PVAV) {
+        if (UNLIKELY( !SvROK(w_tmp) || SvTYPE(SvRV(x_tmp)) != SVt_PVAV )) {
           croak("Need array of weights if using array of x values");
         }
         xav = (AV*)SvRV(x_tmp);
         wav = (AV*)SvRV(w_tmp);
         n = av_len(xav);
-        if (av_len(wav) != n) {
+        if (UNLIKELY( av_len(wav) != n )) {
           croak("x and w array lengths differ");
         }
 
@@ -149,7 +170,7 @@ fill(self, ...)
         Newx(w, n+1, double);
         for (i = 0; i <= n; ++i) {
           sv = av_fetch(xav, i, 0);
-          if (sv == NULL) {
+          if (UNLIKELY( sv == NULL )) {
             Safefree(x);
             Safefree(w);
             croak("Shouldn't happen");
@@ -157,7 +178,7 @@ fill(self, ...)
           x[i] = SvNV(*sv);
 
           sv = av_fetch(wav, i, 0);
-          if (sv == NULL) {
+          if (UNLIKELY( sv == NULL )) {
             Safefree(x);
             Safefree(w);
             croak("Shouldn't happen");

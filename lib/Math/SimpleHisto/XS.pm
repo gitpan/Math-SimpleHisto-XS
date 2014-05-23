@@ -4,7 +4,7 @@ use strict;
 use warnings;
 use Carp qw(croak);
 
-our $VERSION = '1.29'; # Committed to floating point version numbers!
+our $VERSION = '1.30'; # Committed to floating point version numbers!
 
 require XSLoader;
 XSLoader::load('Math::SimpleHisto::XS', $VERSION);
@@ -551,6 +551,13 @@ object to the invocant's content. This works only if the binning of the
 histograms is exactly the same. Throws an exception if that is not
 the case.
 
+=head2 C<subtract_histogram>
+
+Given another histogram object, this method will subtract the content of that
+object from the invocant's content. This works only if the binning of the
+histograms is exactly the same. Throws an exception if that is not
+the case.
+
 =head2 C<integral>
 
 Returns the integral over the histogram. I<Very limited at this point>. Usage:
@@ -573,6 +580,16 @@ Calculates the mean of the histogram contents.
 
 Note that the result is not usually the same as if you calculated
 the mean of the input data directly due to the effect of the binning.
+
+=head2 C<standard_deviation>
+
+Calculates the standard deviation of the histogram contents.
+
+Note that the result is not usually the same as if you calculated
+the std. dev. of the input data directly due to the effect of the binning.
+
+First parameter may be the previously calculated mean to avoid
+recalculating it. If not provided, it will be calculated on the fly.
 
 =head2 C<median>
 
@@ -760,7 +777,7 @@ Steffen Mueller, E<lt>smueller@cpan.orgE<gt>
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (C) 2011, 2012, 2013 by Steffen Mueller
+Copyright (C) 2011, 2012, 2013, 2014 by Steffen Mueller
 
 This library is free software; you can redistribute it and/or modify
 it under the same terms as Perl itself, either Perl version 5.8.1 or,
